@@ -1,38 +1,25 @@
-import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.InetSocketAddress;
 import java.net.Socket;
 
 public class Client {
-    public static void main(String[] args) {
-        Socket socket = null;
-        try {
-            socket = new Socket();
-            socket.connect(new InetSocketAddress("localhost", 5001));
+    Socket socket;
+    int num;
 
-            OutputStream out = socket.getOutputStream();
-            InputStream in = socket.getInputStream();
+    Client(Socket socket, int num) {
+        this.socket = socket;
+        this.num = num;
+    }
 
-            String message = "Hello Server";
-            out.write(message.getBytes("UTF-8"));
-            out.flush();
-
-            byte[] bytes = new byte[100];
-            int readByteCount = in.read(bytes);
-            String echo = new String(bytes, 0, readByteCount, "UTF-8");
-            System.out.println(echo + " :: echo");
-
-            out.close();
-            in.close();
-        } catch (Exception e) {
-        }
-
-        if (!socket.isClosed()) {
+    Runnable send(byte[] data) {
+        Runnable runnable = () -> {
             try {
-                socket.close();
-            } catch (IOException e) {
+                OutputStream out = socket.getOutputStream();
+                out.write(data);
+                out.flush();
+            } catch (Exception e) {
             }
-        }
+        };
+        return runnable;
     }
 }
