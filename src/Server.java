@@ -1,16 +1,12 @@
 import java.net.InetSocketAddress;
-import java.nio.channels.SelectionKey;
-import java.nio.channels.Selector;
-import java.nio.channels.ServerSocketChannel;
-import java.nio.channels.SocketChannel;
-import java.util.Iterator;
+import java.nio.channels.*;
 import java.util.List;
-import java.util.Set;
 import java.util.Vector;
+import java.util.concurrent.Executors;
 
 class Server{
-    Selector selector;
-    private ServerSocketChannel serverSocketChannel;
+    AsynchronousChannelGroup channelGroup;
+    AsynchronousServerSocketChannel serverSocketChannel;
     private List<Client> connections = new Vector<>();
 
     Server(){
@@ -19,11 +15,12 @@ class Server{
 
     void startServer() {
         try {
-            selector = Selector.open();
-            serverSocketChannel = ServerSocketChannel.open();
-            serverSocketChannel.configureBlocking(false);
+            channelGroup = AsynchronousChannelGroup.withFixedThreadPool(
+                    Runtime.getRuntime().availableProcessors(),
+                    Executors.defaultThreadFactory()
+            );
+            serverSocketChannel = AsynchronousServerSocketChannel.open(channelGroup);
             serverSocketChannel.bind(new InetSocketAddress(5001));
-            serverSocketChannel.register(selector, SelectionKey.OP_ACCEPT);
         } catch (Exception e) {
             if(serverSocketChannel.isOpen()) {
                 stopServer();
@@ -31,71 +28,31 @@ class Server{
             }
         }
 
-        Thread thread = new Thread(() -> {
-            while(true) {
-                try {
-                    int keyCount = selector.select();
-                    if(keyCount == 0) {
-                        continue;
-                    }
-                    Set<SelectionKey> selectionKeys = selector.selectedKeys();
-                    Iterator<SelectionKey> iterator = selectionKeys.iterator();
-                    while(iterator.hasNext()) {
-                        SelectionKey selectionKey = iterator.next();
-                        if(selectionKey.isAcceptable()) {
-                            accept(selectionKey);
-                        } else if (selectionKey.isReadable()) {
-                            Client client = (Client)selectionKey.attachment();
-                            client.receive();
-                        } else if(selectionKey.isWritable()) {
-                            Client client = (Client)selectionKey.attachment();
-                            client.send(selectionKey);
-                        }
-                        iterator.remove();
-                    }
-                } catch (Exception e) {
-                    if(serverSocketChannel.isOpen()) {
-                        stopServer();
-                        break;
-                    }
+        serverSocketChannel.accept(null, new CompletionHandler<AsynchronousSocketChannel, Void>() {
+            @Override
+            public void completed(AsynchronousSocketChannel socketChannel, Void attachment) {
+
+                Client client = new Client(socketChannel, connections);
+                connections.add(client);
+                serverSocketChannel.accept(null, this);
+            }
+            @Override
+            public void failed(Throwable exc, Void attachment) {
+                if(serverSocketChannel.isOpen()) {
+                    stopServer();
                 }
             }
         });
-        thread.start();
     }
 
     private void stopServer() {
         try {
-            Iterator<Client> iterator = connections.iterator();
-            while(iterator.hasNext()) {
-                Client client = iterator.next();
-                client.socketChannel.close();
-                iterator.remove();
-            }
-            if(serverSocketChannel != null && serverSocketChannel.isOpen()) {
-                serverSocketChannel.close();
-            }
-            if(selector != null && selector.isOpen()) {
-                selector.close();
+            connections.clear();
+            if(channelGroup != null && !channelGroup.isShutdown()) {
+                channelGroup.shutdownNow();
             }
         } catch (Exception e) {
 
-        }
-    }
-
-    private void accept(SelectionKey selectionKey) {
-        try {
-            ServerSocketChannel serverSocketChannel = (ServerSocketChannel) selectionKey.channel();
-            SocketChannel socketChannel = serverSocketChannel.accept();
-
-            System.out.println("new client accepted");
-
-            Client client = new Client(socketChannel, connections, selector);
-            connections.add(client);
-        } catch (Exception e) {
-            if(serverSocketChannel.isOpen()) {
-                stopServer();
-            }
         }
     }
 }

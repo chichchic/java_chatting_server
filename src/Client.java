@@ -1,67 +1,67 @@
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.channels.SelectionKey;
-import java.nio.channels.Selector;
-import java.nio.channels.SocketChannel;
+import java.nio.channels.*;
 import java.nio.charset.Charset;
 import java.util.List;
 
 class Client {
-    SocketChannel socketChannel;
-    private String sendData;
+    AsynchronousSocketChannel socketChannel;
     private List<Client> connections;
-    Selector selector;
 
-    Client(SocketChannel socketChannel, List<Client> connections, Selector selector) throws IOException{
+    Client(AsynchronousSocketChannel socketChannel, List<Client> connections) {
         this.socketChannel = socketChannel;
         this.connections = connections;
-        this.selector = selector;
-        socketChannel.configureBlocking(false);
-        SelectionKey selectionKey = socketChannel.register(selector, SelectionKey.OP_READ);
-        selectionKey.attach(this);
+        receive();
     }
 
     void receive() {
-        try {
-            ByteBuffer byteBuffer = ByteBuffer.allocate(100);
-            int byteCount = socketChannel.read(byteBuffer);
+        ByteBuffer byteBuffer = ByteBuffer.allocate(100);
+        socketChannel.read(byteBuffer, byteBuffer, new CompletionHandler<>() {
+            @Override
+            public void completed(Integer result, ByteBuffer attachment) {
+                try {
+                    attachment.flip();
+                    Charset charset = Charset.forName("UTF-8");
+                    String data = charset.decode(attachment).toString();
 
-            if(byteCount == -1) {
-                throw new IOException();
+                    for (Client client : connections) {
+                        client.send(data);
+                    }
+
+                    ByteBuffer byteBuffer = ByteBuffer.allocate(100);
+                    socketChannel.read(byteBuffer, byteBuffer, this);
+                } catch (Exception e) {
+
+                }
             }
 
-            byteBuffer.flip();
-            Charset charset = Charset.forName("UTF-8");
-            String data = charset.decode(byteBuffer).toString();
-
-            for(Client client : connections) {
-                client.sendData = data;
-                SelectionKey key = client.socketChannel.keyFor(selector);
-                key.interestOps(SelectionKey.OP_WRITE);
+            @Override
+            public void failed(Throwable exc, ByteBuffer attachment) {
+                try {
+                    connections.remove(Client.this);
+                    socketChannel.close();
+                } catch (IOException IOe) {
+                }
             }
-            selector.wakeup();
-        } catch (Exception e) {
-            try {
-                connections.remove(this);
-                socketChannel.close();
-            } catch (IOException IOe) {
-            }
-        }
+        });
     }
 
-    void send(SelectionKey selectionKey) {
-        try {
-            Charset charset = Charset.forName("UTF-8");
-            ByteBuffer byteBuffer = charset.encode(sendData);
-            socketChannel.write(byteBuffer);
-            selectionKey.interestOps(SelectionKey.OP_READ);
-            selector.wakeup();
-        } catch (Exception e) {
-            try {
-                connections.remove(this);
-                socketChannel.close();
-            } catch (IOException IOe) {
+    void send(String data) {
+        Charset charset = Charset.forName("UTF-8");
+        ByteBuffer byteBuffer = charset.encode(data);
+        socketChannel.write(byteBuffer, null, new CompletionHandler<Integer, Void>() {
+            @Override
+            public void completed(Integer result, Void attachment) {
             }
-        }
+
+            @Override
+            public void failed(Throwable exc, Void attachment) {
+                try {
+                    connections.remove(Client.this);
+                    socketChannel.close();
+                } catch (IOException e) {
+                }
+            }
+        });
     }
 }
