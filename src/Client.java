@@ -1,62 +1,67 @@
 import java.io.IOException;
-import java.io.OutputStream;
 import java.nio.ByteBuffer;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
 import java.nio.channels.SocketChannel;
 import java.nio.charset.Charset;
 import java.util.List;
-import java.util.concurrent.ExecutorService;
 
 class Client {
-    private ExecutorService executorService;
     SocketChannel socketChannel;
-    private int num;
+    private String sendData;
     private List<Client> connections;
+    Selector selector;
 
-    Client(SocketChannel socketChannel, int num, List<Client> connections, ExecutorService executorService ) {
+    Client(SocketChannel socketChannel, List<Client> connections, Selector selector) throws IOException{
         this.socketChannel = socketChannel;
-        this.num = num;
         this.connections = connections;
-        this.executorService = executorService;
-        receive();
+        this.selector = selector;
+        socketChannel.configureBlocking(false);
+        SelectionKey selectionKey = socketChannel.register(selector, SelectionKey.OP_READ);
+        selectionKey.attach(this);
     }
 
-    private void receive() {
-        Runnable runnable = () -> {
-            while(true) {
-                try{
-                    ByteBuffer byteBuffer = ByteBuffer.allocate(100);
-                    int readByteCount = socketChannel.read(byteBuffer);
-                    if(readByteCount == -1) {
-                        throw new IOException();
-                    }
+    void receive() {
+        try {
+            ByteBuffer byteBuffer = ByteBuffer.allocate(100);
+            int byteCount = socketChannel.read(byteBuffer);
 
-                    byteBuffer.flip();
-                    Charset charset = Charset.forName("UTF-8");
-                    String data = charset.decode(byteBuffer).toString();
-                    for(Client client : connections) {
-                        client.send(data);
-                    }
-                } catch (Exception e) {
-                    break;
-                }
+            if(byteCount == -1) {
+                throw new IOException();
             }
-        };
-        executorService.submit(runnable);
-    }
 
-    private void send(String data) {
-        Runnable runnable = () -> {
+            byteBuffer.flip();
+            Charset charset = Charset.forName("UTF-8");
+            String data = charset.decode(byteBuffer).toString();
+
+            for(Client client : connections) {
+                client.sendData = data;
+                SelectionKey key = client.socketChannel.keyFor(selector);
+                key.interestOps(SelectionKey.OP_WRITE);
+            }
+            selector.wakeup();
+        } catch (Exception e) {
             try {
-                Charset charset = Charset.forName("UTF-8");
-                ByteBuffer byteBuffer = charset.encode(data);
-                socketChannel.write(byteBuffer);
-            } catch (Exception e) {
-                try {
-                    socketChannel.close();
-                } catch (IOException e2) {
-                }
+                connections.remove(this);
+                socketChannel.close();
+            } catch (IOException IOe) {
             }
-        };
-        executorService.submit(runnable);
+        }
+    }
+
+    void send(SelectionKey selectionKey) {
+        try {
+            Charset charset = Charset.forName("UTF-8");
+            ByteBuffer byteBuffer = charset.encode(sendData);
+            socketChannel.write(byteBuffer);
+            selectionKey.interestOps(SelectionKey.OP_READ);
+            selector.wakeup();
+        } catch (Exception e) {
+            try {
+                connections.remove(this);
+                socketChannel.close();
+            } catch (IOException IOe) {
+            }
+        }
     }
 }

@@ -1,14 +1,15 @@
 import java.net.InetSocketAddress;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Set;
 import java.util.Vector;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 class Server{
-    private ExecutorService executorService;
+    Selector selector;
     private ServerSocketChannel serverSocketChannel;
     private List<Client> connections = new Vector<>();
 
@@ -16,12 +17,13 @@ class Server{
         startServer();
     }
 
-    void startServer(){
-        executorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+    void startServer() {
         try {
+            selector = Selector.open();
             serverSocketChannel = ServerSocketChannel.open();
-            serverSocketChannel.configureBlocking(true);
+            serverSocketChannel.configureBlocking(false);
             serverSocketChannel.bind(new InetSocketAddress(5001));
+            serverSocketChannel.register(selector, SelectionKey.OP_ACCEPT);
         } catch (Exception e) {
             if(serverSocketChannel.isOpen()) {
                 stopServer();
@@ -29,21 +31,37 @@ class Server{
             }
         }
 
-        Runnable runnable = () -> {
+        Thread thread = new Thread(() -> {
             while(true) {
                 try {
-                    SocketChannel socketChannel = serverSocketChannel.accept();
-                    System.out.println("new client connected");
-                    Client client = new Client(socketChannel, connections.size()+1, connections, executorService);
-                    connections.add(client);
+                    int keyCount = selector.select();
+                    if(keyCount == 0) {
+                        continue;
+                    }
+                    Set<SelectionKey> selectionKeys = selector.selectedKeys();
+                    Iterator<SelectionKey> iterator = selectionKeys.iterator();
+                    while(iterator.hasNext()) {
+                        SelectionKey selectionKey = iterator.next();
+                        if(selectionKey.isAcceptable()) {
+                            accept(selectionKey);
+                        } else if (selectionKey.isReadable()) {
+                            Client client = (Client)selectionKey.attachment();
+                            client.receive();
+                        } else if(selectionKey.isWritable()) {
+                            Client client = (Client)selectionKey.attachment();
+                            client.send(selectionKey);
+                        }
+                        iterator.remove();
+                    }
                 } catch (Exception e) {
                     if(serverSocketChannel.isOpen()) {
                         stopServer();
+                        break;
                     }
                 }
             }
-        };
-        executorService.submit(runnable);
+        });
+        thread.start();
     }
 
     private void stopServer() {
@@ -54,12 +72,30 @@ class Server{
                 client.socketChannel.close();
                 iterator.remove();
             }
-            if(serverSocketChannel != null &&
-            !executorService.isShutdown()) {
-                executorService.shutdown();
+            if(serverSocketChannel != null && serverSocketChannel.isOpen()) {
+                serverSocketChannel.close();
+            }
+            if(selector != null && selector.isOpen()) {
+                selector.close();
             }
         } catch (Exception e) {
 
+        }
+    }
+
+    private void accept(SelectionKey selectionKey) {
+        try {
+            ServerSocketChannel serverSocketChannel = (ServerSocketChannel) selectionKey.channel();
+            SocketChannel socketChannel = serverSocketChannel.accept();
+
+            System.out.println("new client accepted");
+
+            Client client = new Client(socketChannel, connections, selector);
+            connections.add(client);
+        } catch (Exception e) {
+            if(serverSocketChannel.isOpen()) {
+                stopServer();
+            }
         }
     }
 }
