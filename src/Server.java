@@ -1,78 +1,65 @@
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.ServerSocket;
-import java.net.Socket;
+import java.net.InetSocketAddress;
+import java.nio.channels.ServerSocketChannel;
+import java.nio.channels.SocketChannel;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Vector;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-public class Server {
-    ExecutorService executorService;
-    ServerSocket serverSocket = null;
-    List<Client> clientList = new Vector<>();
-    InputStream in;
+class Server{
+    private ExecutorService executorService;
+    private ServerSocketChannel serverSocketChannel;
+    private List<Client> connections = new Vector<>();
 
     Server(){
-        createServer();
+        startServer();
     }
 
-     public void createServer() {
-        executorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors()); //cpu 코어 개수만큼
+    void startServer(){
+        executorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
         try {
-            serverSocket = new ServerSocket(5001);
+            serverSocketChannel = ServerSocketChannel.open();
+            serverSocketChannel.configureBlocking(true);
+            serverSocketChannel.bind(new InetSocketAddress(5001));
         } catch (Exception e) {
-            if (!serverSocket.isClosed()) {
+            if(serverSocketChannel.isOpen()) {
                 stopServer();
+                return;
             }
-            return;
         }
 
         Runnable runnable = () -> {
             while(true) {
-                try{
-                    Socket socket = serverSocket.accept();
-                    System.out.println((clientList.size()+1) + "번째 클라이언트가 연결되었습니다.");
-                    in = socket.getInputStream();
-                    byte[] bytes = new byte[100];
-                    int readByteCount = in.read(bytes);
-                    for(Client client : clientList) {
-                        Runnable broadcast = client.send(bytes);
-                        executorService.submit(broadcast);
-                    }
-                    Client client = new Client(socket, clientList.size() + 1);
-                    clientList.add(client);
+                try {
+                    SocketChannel socketChannel = serverSocketChannel.accept();
+                    System.out.println("new client connected");
+                    Client client = new Client(socketChannel, connections.size()+1, connections, executorService);
+                    connections.add(client);
                 } catch (Exception e) {
-                    if (!serverSocket.isClosed()) {
+                    if(serverSocketChannel.isOpen()) {
                         stopServer();
                     }
-                    break;
                 }
             }
         };
-
         executorService.submit(runnable);
     }
 
-
-
-    void stopServer() {
+    private void stopServer() {
         try {
-            Iterator<Client> iterator = clientList.iterator();
+            Iterator<Client> iterator = connections.iterator();
             while(iterator.hasNext()) {
                 Client client = iterator.next();
-                client.socket.close();
+                client.socketChannel.close();
                 iterator.remove();
             }
-            if (serverSocket != null && !serverSocket.isClosed()) {
-                serverSocket.close();
-            }
-            if(executorService != null && !executorService.isShutdown()) {
+            if(serverSocketChannel != null &&
+            !executorService.isShutdown()) {
                 executorService.shutdown();
             }
-        } catch (Exception e) {}
-        System.out.println("stop server");
+        } catch (Exception e) {
+
+        }
     }
 }

@@ -1,25 +1,62 @@
-import java.io.InputStream;
+import java.io.IOException;
 import java.io.OutputStream;
-import java.net.Socket;
+import java.nio.ByteBuffer;
+import java.nio.channels.SocketChannel;
+import java.nio.charset.Charset;
+import java.util.List;
+import java.util.concurrent.ExecutorService;
 
-public class Client {
-    Socket socket;
-    int num;
+class Client {
+    private ExecutorService executorService;
+    SocketChannel socketChannel;
+    private int num;
+    private List<Client> connections;
 
-    Client(Socket socket, int num) {
-        this.socket = socket;
+    Client(SocketChannel socketChannel, int num, List<Client> connections, ExecutorService executorService ) {
+        this.socketChannel = socketChannel;
         this.num = num;
+        this.connections = connections;
+        this.executorService = executorService;
+        receive();
     }
 
-    Runnable send(byte[] data) {
+    private void receive() {
         Runnable runnable = () -> {
-            try {
-                OutputStream out = socket.getOutputStream();
-                out.write(data);
-                out.flush();
-            } catch (Exception e) {
+            while(true) {
+                try{
+                    ByteBuffer byteBuffer = ByteBuffer.allocate(100);
+                    int readByteCount = socketChannel.read(byteBuffer);
+                    if(readByteCount == -1) {
+                        throw new IOException();
+                    }
+
+                    byteBuffer.flip();
+                    Charset charset = Charset.forName("UTF-8");
+                    String data = charset.decode(byteBuffer).toString();
+                    for(Client client : connections) {
+                        client.send(data);
+                    }
+                } catch (Exception e) {
+                    break;
+                }
             }
         };
-        return runnable;
+        executorService.submit(runnable);
+    }
+
+    private void send(String data) {
+        Runnable runnable = () -> {
+            try {
+                Charset charset = Charset.forName("UTF-8");
+                ByteBuffer byteBuffer = charset.encode(data);
+                socketChannel.write(byteBuffer);
+            } catch (Exception e) {
+                try {
+                    socketChannel.close();
+                } catch (IOException e2) {
+                }
+            }
+        };
+        executorService.submit(runnable);
     }
 }
